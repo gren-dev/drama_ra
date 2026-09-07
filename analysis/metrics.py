@@ -24,13 +24,15 @@ def week_of(ts: pd.Series) -> pd.Series:
 
 # ---------- 题材 × 周 ----------
 
-def genre_weekly(weeks: int = 8) -> pd.DataFrame:
-    """每题材每周：热度(每部剧取周内均值再求和)、剧数、份额、排名。"""
+def genre_weekly(weeks: int = 8, platform: str | None = None) -> pd.DataFrame:
+    """每题材每周：热度(每部剧取周内均值再求和)、剧数、份额、排名。
+    platform: 只看某个数据源/榜单，如 'hongguo:AI剧'；None=全部。"""
     df = _q("""
         select d.id drama_id, d.genre, m.ts, m.heat
         from metric_snapshot m join drama d on d.id=m.drama_id
-        where d.genre is not null and m.heat is not null and m.ts >= :since""",
-            since=datetime.utcnow() - timedelta(weeks=weeks))
+        where d.genre is not null and m.heat is not null and m.ts >= :since
+          and (:platform is null or m.platform = :platform)""",
+            since=datetime.utcnow() - timedelta(weeks=weeks), platform=platform)
     if df.empty:
         return df
     df["week"] = week_of(df.ts)
@@ -41,9 +43,9 @@ def genre_weekly(weeks: int = 8) -> pd.DataFrame:
     return g.sort_values(["week", "rank"])
 
 
-def genre_momentum() -> pd.DataFrame:
+def genre_momentum(platform: str | None = None) -> pd.DataFrame:
     """本周 vs 上周：份额、环比、剧数变化、四象限动作建议。"""
-    g = genre_weekly(8)
+    g = genre_weekly(8, platform)
     if g.empty:
         return g
     weeks = sorted(g.week.unique())
@@ -137,6 +139,11 @@ def top_movers(days: int = 7, n: int = 15) -> pd.DataFrame:
         return df
     df["delta_pct"] = np.where(df.prev_heat > 0, (df.cur_heat - df.prev_heat) / df.prev_heat, np.nan)
     return df.sort_values("delta_pct", ascending=False, na_position="last").head(n)
+
+
+def platforms() -> list[str]:
+    df = _q("select distinct platform from metric_snapshot order by platform")
+    return df.platform.tolist() if not df.empty else []
 
 
 def cluster_history() -> pd.DataFrame:

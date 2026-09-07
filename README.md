@@ -34,7 +34,20 @@ streamlit run app/dashboard.py
 
 多跑几次 `python -m crawler.run` 就有趋势曲线了（样例源每次热度带随机波动）。
 
-## 接真实数据源（必做的一步）
+## 数据源
+
+默认启用两个真实源（`crawler/run.py` 的 `ENABLED`）：
+
+**红果短剧官方网页版 hongguoduanju.com**（`crawler/sources/hongguo.py`）：字节官方 SEO 榜单页，服务端渲染，不用逆向 App。
+四个榜：总榜 / 真人剧 / **AI剧** / 漫剧，每榜 5 页 100 条，自带简介、热度、评分、收藏、点赞、标签、新剧标记。
+每个榜单单独记 snapshot（platform=`hongguo:AI剧` 等），站点左侧「数据范围」可以只看 AI 剧的题材动量。
+
+**短剧百科 duanjubaike.net**（`crawler/sources/duanjubaike.py`）：聚合番茄/红果/河马/点众等平台的每日热度榜，
+抓热播/新剧/热搜/收藏四个榜 + 详情页（简介、标签、出品方、上线日期）。解析只认链接和文字模式，不依赖 class 名。
+每次运行最多补抓 60 个详情页（`DETAIL_BUDGET`），首轮之后每天只有新剧需要补。
+这个站没有评论，观众反馈那页要等接上抖音/快手评论源才有数据。
+
+## 接其他数据源（可选）
 
 我写代码时访问不了这些站，`dataeye.py` / `fanqie.py` 里的 URL 和 CSS 选择器是占位，要按真实页面校一遍：
 

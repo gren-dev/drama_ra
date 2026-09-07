@@ -32,9 +32,11 @@ def load_dramas() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def m_weekly(): return metrics.genre_weekly(8)
+def m_weekly(platform=None): return metrics.genre_weekly(8, platform)
 @st.cache_data(ttl=300)
-def m_momentum(): return metrics.genre_momentum()
+def m_momentum(platform=None): return metrics.genre_momentum(platform)
+@st.cache_data(ttl=300)
+def m_platforms(): return metrics.platforms()
 @st.cache_data(ttl=300)
 def m_sent(): return metrics.genre_sentiment()
 @st.cache_data(ttl=300)
@@ -62,7 +64,7 @@ def latest_report():
 
 
 def quadrant_chart(m: pd.DataFrame):
-    m = m.dropna(subset=["wow"]).copy()
+    m = m.dropna(subset=["wow"]).copy() if "wow" in m.columns else pd.DataFrame()
     if m.empty:
         st.info("需要至少两周数据才能算环比。样例数据可跑 `python scripts/seed_history.py`。")
         return
@@ -119,15 +121,29 @@ def share_area(g: pd.DataFrame, top=8):
 df = load_dramas()
 st.sidebar.title("📡 短剧题材雷达")
 page = st.sidebar.radio("页面", ["总览", "题材趋势", "观众反馈", "新兴题材", "出品方", "剧集库", "AI 周报"])
+_plats = m_platforms()
+_labels = {None: "全部数据源"} | {p: p.replace("hongguo:", "红果·").replace("duanjubaike", "短剧百科").replace("sample", "样例") for p in _plats}
+scope = st.sidebar.selectbox("数据范围", list(_labels), format_func=lambda x: _labels[x],
+                             help="选一个榜单只看它，例如「红果·AI剧」只看 AI 短剧的题材动量")
 st.sidebar.caption(f"库内 {len(df)} 部剧 · 已打标 {df.tagged_at.notna().sum()} 部")
 
 # ================= 总览 =================
 if page == "总览":
-    m, s, rep = m_momentum(), m_sent(), latest_report()
-    kpi = rep.get("kpi") or metrics.kpi_summary()
+    m, s, rep = m_momentum(scope), m_sent(), latest_report()
+    kpi = (rep.get("kpi") if scope is None else None) or metrics.kpi_summary()
+    if scope is not None and not m.empty:
+        # 切了范围就现算 KPI，不用周报里的全局值
+        valid = m.dropna(subset=["wow"])
+        kpi = {"week": m.week.iloc[0] if not m.empty else "",
+               "total_wow": float((m.heat.sum() - m.heat_prev.sum()) / m.heat_prev.sum()) if not m.empty and m.heat_prev.sum() else None,
+               "top_riser": {"genre": valid.iloc[0].genre, "wow": float(valid.iloc[0].wow)} if not valid.empty else {},
+               "top_faller": {"genre": valid.iloc[-1].genre, "wow": float(valid.iloc[-1].wow)} if not valid.empty else {},
+               "most_negative": kpi.get("most_negative") or {}}
     st.title("本周一眼看")
-    if rep.get("headline"):
+    if rep.get("headline") and scope is None:
         theme.headline(rep["headline"], f"{kpi.get('week', '')} · 数据来自 {len(df)} 部剧的热度与评论")
+    elif scope is not None:
+        theme.headline(f"{_labels[scope]} · 题材动量", f"{kpi.get('week', '')} · 只统计该榜单的热度")
 
     c1, c2, c3, c4 = st.columns(4)
     theme.kpi(c1, "总热度周环比", pct(kpi.get("total_wow"), True))
@@ -142,7 +158,7 @@ if page == "总览":
     st.caption("横轴=当前热度份额，纵轴=周环比，气泡=剧数。右上绿区追，右下红区回避。")
     quadrant_chart(m)
 
-    if not m.empty:
+    if not m.empty and "wow" in m.columns:
         l, rgt = st.columns(2)
         with l:
             st.subheader("动作清单")
@@ -171,7 +187,7 @@ if page == "总览":
 # ================= 题材趋势 =================
 elif page == "题材趋势":
     st.title("题材热度趋势")
-    g = m_weekly()
+    g = m_weekly(scope)
     if g.empty:
         st.info("还没有指标数据，先跑 `python pipeline.py`")
     else:

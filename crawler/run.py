@@ -8,6 +8,8 @@ from crawler.base import ingest
 from crawler.sources.sample import SampleSource
 from crawler.sources.dataeye import DataEyeSource
 from crawler.sources.fanqie import FanqieSource
+from crawler.sources.duanjubaike import DuanjubaikeSource
+from crawler.sources.hongguo import HongguoSource
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("crawler.run")
@@ -16,8 +18,10 @@ SOURCES = {
     "sample": SampleSource,
     "dataeye": DataEyeSource,
     "fanqie": FanqieSource,
+    "duanjubaike": DuanjubaikeSource,
+    "hongguo": HongguoSource,
 }
-ENABLED = ["sample"]   # 选择器校准好后加 "dataeye", "fanqie"
+ENABLED = ["hongguo", "duanjubaike"]   # 真实源。想用样例数据跑通流程：python -m crawler.run sample
 
 
 def crawl(names=None):
