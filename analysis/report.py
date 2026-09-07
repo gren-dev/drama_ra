@@ -1,95 +1,71 @@
-"""第三档：趋势周报。只对变化最大的剧和簇跑一次强模型，成本可控。
+"""第三档：趋势周报。
+数据来自 analysis/metrics.py 的确定性计算，LLM 只做解读并输出 JSON；
+每条结论必须带数字。站点把 JSON 渲染成卡片，markdown 作为兜底/导出。
 python -m analysis.report
 """
+import json
 import logging
-from datetime import datetime, timedelta
 
-import pandas as pd
 import config
-from db.session import init_db, session_scope, engine
-from db.models import Report, Cluster
+from db.session import init_db, session_scope
+from db.models import Report
 from analysis.llm import LLM
 from analysis.cluster import week_str
+from analysis import metrics
 
 log = logging.getLogger("analysis.report")
 
-SYSTEM = """你是短剧行业分析师，读者是编剧和制片人。根据给你的数据写一份《本周题材风向周报》(report)，markdown 格式，600字以内。
-结构：
-1. 一句话总结本周最大变化
-2. 上升题材（2-3条，每条带数据和一句为什么）
-3. 下降/饱和题材（1-2条）
-4. 新冒头的簇（如果有）值不值得跟
-5. 观众吐槽集中点（来自评论情感）
-6. 给编剧的 3 条可执行建议
-不要空话，每个判断都要落到数据上。"""
+SYSTEM = """你是短剧行业分析师，读者是编剧和制片人，他们只想知道：追什么、避什么、有什么新东西。
+根据给你的数据表输出一份周报 (report)，只输出 JSON，不要 markdown 代码块，不要解释。
+硬性要求：
+- 每一条结论都必须引用表里的具体数字（份额、环比、负面率、剧数），不允许没有数字的判断
+- 不要写"值得关注""持续观察"这类空话；要写"做/不做/等"和原因
+- 上升题材只从 action 为"追"或"布局"的里选；饱和题材从"回避"或负面率/疲劳率最高的里选
+- 用词直接、短句，每个 why 不超过 40 字
+
+JSON 结构：
+{
+  "headline": "一句话（含至少两个数字）说明本周最大变化",
+  "rising": [{"genre": "", "wow_pct": 0, "share_pct": 0, "action": "追|布局", "why": ""}],
+  "saturated": [{"genre": "", "wow_pct": 0, "neg_ratio_pct": 0, "why": ""}],
+  "emerging": [{"label": "", "size": 0, "verdict": "跟|再看|不跟", "why": ""}],
+  "audience": [{"genre": "", "neg_ratio_pct": 0, "top_complaint": "", "insight": ""}],
+  "actions": ["", "", ""],
+  "markdown": "把上面内容整理成 500 字内的 markdown 周报，用于导出"
+}
+rising 2-3条，saturated 1-2条，emerging 只放本周新出现的簇（没有就空数组），audience 2-3条，actions 3条且每条带一个数字依据。"""
 
 
-def genre_trend(days=7) -> pd.DataFrame:
-    q = f"""
-    select d.genre, date(m.ts) as day, sum(m.heat) heat, count(distinct d.id) n
-    from metric_snapshot m join drama d on d.id=m.drama_id
-    where m.ts >= datetime('now','-{days*2} day') and d.genre is not null
-    group by d.genre, day order by day"""
-    return pd.read_sql(q, engine)
-
-
-def top_movers(days=7, n=20) -> pd.DataFrame:
-    q = f"""
-    with cur as (select drama_id, avg(heat) h from metric_snapshot
-                 where ts >= datetime('now','-{days} day') group by drama_id),
-         prev as (select drama_id, avg(heat) h from metric_snapshot
-                  where ts < datetime('now','-{days} day') and ts >= datetime('now','-{days*2} day') group by drama_id)
-    select d.title, d.genre, d.sub_genre, cur.h cur_heat, coalesce(prev.h,0) prev_heat,
-           (cur.h - coalesce(prev.h, cur.h)) delta
-    from cur left join prev on prev.drama_id=cur.drama_id join drama d on d.id=cur.drama_id
-    order by abs(delta) desc, cur_heat desc limit {n}"""
-    return pd.read_sql(q, engine)
-
-
-def complaint_summary() -> pd.DataFrame:
-    q = """
-    select d.genre, c.sentiment, count(*) n
-    from comment c join drama d on d.id=c.drama_id
-    where c.sentiment is not null group by d.genre, c.sentiment"""
-    return pd.read_sql(q, engine)
-
-
-def build_context() -> str:
-    wk = week_str()
-    parts = []
-    gt = genre_trend()
-    if not gt.empty:
-        pivot = gt.groupby("genre").agg(heat=("heat", "sum"), dramas=("n", "max")).sort_values("heat", ascending=False)
-        parts.append("## 各题材近两周总热度\n" + pivot.head(15).to_string())
-    tm = top_movers()
-    if not tm.empty:
-        parts.append("## 热度变化最大的剧\n" + tm.to_string(index=False))
-    with session_scope() as s:
-        cl = s.query(Cluster).filter_by(week=wk).all()
-        if cl:
-            parts.append("## 本周聚类簇\n" + "\n".join(
-                f"- {c.label}（{c.size}部，{'新出现' if c.is_new else '延续'}）: {c.description} | 关键词 {c.keywords}" for c in cl))
-    cs = complaint_summary()
-    if not cs.empty:
-        parts.append("## 评论情感分布（题材 x 情感）\n" + cs.to_string(index=False))
-    negs = pd.read_sql("""select d.title, c.text from comment c join drama d on d.id=c.drama_id
-                          where c.sentiment='neg' order by c.likes desc limit 20""", engine)
-    if not negs.empty:
-        parts.append("## 高赞负面评论样本\n" + "\n".join(f"- 《{r.title}》：{r.text}" for r in negs.itertuples()))
-    return "\n\n".join(parts)
+def _fallback_md(kpi: dict) -> str:
+    lines = ["## 本周题材风向（自动生成）"]
+    if kpi.get("top_riser"):
+        r = kpi["top_riser"]; lines.append(f"- 上升最快：{r['genre']} 周环比 {r['wow']:+.0%}，份额 {r['share']:.0%}")
+    if kpi.get("top_faller"):
+        f = kpi["top_faller"]; lines.append(f"- 下滑最快：{f['genre']} 周环比 {f['wow']:+.0%}")
+    if kpi.get("most_negative"):
+        n = kpi["most_negative"]; lines.append(f"- 负面率最高：{n['genre']} {n['neg_ratio']:.0%}，主要吐槽 {n['top_complaint']}")
+    return "\n".join(lines)
 
 
 def run():
     init_db()
-    ctx = build_context()
+    ctx = metrics.report_context()
+    kpi = metrics.kpi_summary()
     llm = LLM(model=config.REPORT_MODEL)
-    md = llm.chat(SYSTEM, ctx, max_tokens=1500, temperature=0.4)
+    data = llm.chat_json(SYSTEM, ctx, max_tokens=3000, temperature=0.3) if ctx else None
+    if not isinstance(data, dict) or "headline" not in data:
+        log.warning("周报 JSON 解析失败，使用兜底")
+        md = _fallback_md(kpi)
+        data = {"headline": md.split("\n")[1] if "\n" in md else "数据不足", "rising": [], "saturated": [],
+                "emerging": [], "audience": [], "actions": [], "markdown": md}
+    data["kpi"] = kpi
+    md = data.get("markdown") or _fallback_md(kpi)
     with session_scope() as s:
-        s.add(Report(week=week_str(), content_md=md, model=f"{llm.provider}/{llm.model}"))
-    log.info("report written (%d chars)", len(md))
-    return md
+        s.add(Report(week=week_str(), content_md=md, content_json=data, model=f"{llm.provider}/{llm.model}"))
+    log.info("report written: %s", str(data.get("headline", ""))[:80])
+    return data
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print(run())
+    print(json.dumps(run(), ensure_ascii=False, indent=2))

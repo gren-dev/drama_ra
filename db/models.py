@@ -72,6 +72,7 @@ class Comment(Base):
     likes = Column(Integer, default=0)
     ts = Column(DateTime, default=datetime.utcnow)
     sentiment = Column(String(10))    # pos / neg / neu
+    complaint_tag = Column(String(50))  # 差评的吐槽点，如"套路老"、"演技差"、"节奏慢"
     drama = relationship("Drama", back_populates="comments")
 
 
@@ -94,4 +95,5 @@ class Report(Base):
     week = Column(String(10), index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     content_md = Column(Text)
+    content_json = Column(JSON)        # 结构化周报，站点渲染成卡片
     model = Column(String(100))

@@ -62,3 +62,23 @@ streamlit run app/dashboard.py
 2. 配 LLM key，跑 `python -m analysis.tagger --all` 重打一遍，看 `taxonomy.yaml` 词表要不要调
 3. 加抖音/快手评论源（评论比播放量更能说明观众要什么）
 4. 数据稳定后把 SQLite 换 Postgres（改 `DATABASE_URL` 即可），Streamlit 换 FastAPI + Next.js
+
+## 部署：Supabase + GitHub Actions + Streamlit Cloud
+
+三边共用一个 Postgres：本地/Actions 写，Streamlit Cloud 读。
+
+### 1. Supabase 建库
+1. supabase.com 新建项目，记住数据库密码
+2. Project Settings → Database → Connection string → 选 **Session pooler**（IPv4 兼容，Actions 和 Streamlit Cloud 都能连），复制 URI
+3. 把 `[YOUR-PASSWORD]` 换成密码，末尾加 `?sslmode=require`，得到 `DATABASE_URL`
+4. 本地 `.env` 里 `DATABASE_URL` 改成它，跑 `python pipeline.py`，表会自动建好，Supabase 后台 Table Editor 能看到数据
+
+### 2. 推到 GitHub
+`.env` 已在 `.gitignore` 里，确认没被提交。仓库 Settings → Secrets and variables → Actions，添加：
+`DATABASE_URL`、`OPENAI_COMPAT_BASE_URL`、`OPENAI_COMPAT_API_KEY`、`OPENAI_COMPAT_MODEL`（可选 `REPORT_MODEL`）。
+`.github/workflows/crawl.yml` 会每 6 小时采集打标、周一生成周报；Actions 页面可以手动点 Run workflow 先试一次。
+
+### 3. Streamlit Cloud
+share.streamlit.io → New app → 选仓库，Main file 填 `app/dashboard.py`。
+Advanced settings → Secrets 粘贴 `.streamlit/secrets.toml.example` 的内容（填真实值）。
+以后数据由 Actions 自动更新，站点刷新即可（缓存 5 分钟）。

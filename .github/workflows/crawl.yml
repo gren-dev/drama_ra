@@ -1,0 +1,37 @@
+name: crawl-and-analyze
+on:
+  schedule:
+    - cron: "0 */6 * * *"     # 每 6 小时采集+打标（UTC）
+    - cron: "0 0 * * 1"       # 每周一 08:00 北京时间 聚类+周报
+  workflow_dispatch:          # 也可以在 Actions 页面手动点运行
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      LLM_PROVIDER: openai_compat
+      OPENAI_COMPAT_BASE_URL: ${{ secrets.OPENAI_COMPAT_BASE_URL }}
+      OPENAI_COMPAT_API_KEY: ${{ secrets.OPENAI_COMPAT_API_KEY }}
+      OPENAI_COMPAT_MODEL: ${{ secrets.OPENAI_COMPAT_MODEL }}
+      REPORT_MODEL: ${{ secrets.REPORT_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Install Chromium (only needed for real sources)
+        run: python -m playwright install --with-deps chromium
+      - name: Crawl + tag + sentiment
+        run: |
+          python -m crawler.run
+          python -m analysis.tagger
+          python -m analysis.sentiment
+      - name: Weekly cluster + report
+        if: github.event.schedule == '0 0 * * 1' || github.event_name == 'workflow_dispatch'
+        run: |
+          python -m analysis.cluster
+          python -m analysis.report

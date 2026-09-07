@@ -54,14 +54,15 @@ class LLM:
         if self.provider == "openai_compat":
             kwargs = dict(model=self.model, max_tokens=max_tokens, temperature=temperature,
                           messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
-            if "JSON" in system or "json" in system:
+            if "json" in system.lower():
                 kwargs["response_format"] = {"type": "json_object"}
             r = self.client.chat.completions.create(**kwargs)
             msg = r.choices[0].message
             text = msg.content or ""
-            if not text:  # 思考型模型偶尔正文为空，从 reasoning_content 里捞
+            if not text:  # 思考型模型偶尔正文为空
                 text = getattr(msg, "reasoning_content", "") or ""
             return text
+        return self._mock(system, user)
 
     def chat_json(self, system: str, user: str, **kw) -> Optional[dict]:
         text = self.chat(system, user, **kw)
@@ -99,10 +100,18 @@ class LLM:
     ]
 
     def _mock(self, system: str, user: str) -> str:
+        if "周报" in system or "report" in system.lower():
+            return json.dumps({
+                "headline": "mock 周报：荒岛求生环比 +19%、份额 8% 领涨；萌宝寻亲环比 -17% 走向饱和",
+                "rising": [{"genre": "荒岛求生", "wow_pct": 19, "share_pct": 8, "action": "追", "why": "mock：主流且上升"},
+                           {"genre": "都市逆袭", "wow_pct": 12, "share_pct": 3, "action": "布局", "why": "mock：小众上升"}],
+                "saturated": [{"genre": "萌宝寻亲", "wow_pct": -17, "neg_ratio_pct": 33, "why": "mock：主流下滑"}],
+                "emerging": [{"label": "mock簇", "size": 4, "verdict": "再看", "why": "mock"}],
+                "audience": [{"genre": "悬疑惊悚", "neg_ratio_pct": 50, "top_complaint": "剧情崩", "insight": "mock：结局要收住"}],
+                "actions": ["mock 建议 1（+19%）", "mock 建议 2（-17%）", "mock 建议 3（50%）"],
+                "markdown": "## mock 周报\n未配置 LLM key。"}, ensure_ascii=False)
         if "cluster" in system.lower() or "簇" in system:
             return json.dumps({"label": "mock簇", "description": "mock 模式下的占位描述"}, ensure_ascii=False)
-        if "周报" in system or "report" in system.lower():
-            return "## 本周题材风向（mock）\n\n未配置 LLM key，这是占位周报。配置 .env 后重新运行 `python -m analysis.report`。"
         if "sentiment" in system.lower() or "情感" in system:
             out = []
             for line in user.splitlines():
@@ -111,7 +120,13 @@ class LLM:
                 neg = any(k in line for k in ("烂", "假", "无聊", "老掉牙", "崩", "一般", "太慢", "能不能", "吓"))
                 pos = any(k in line for k in ("爽", "好", "绝", "神", "笑死", "甜", "可以", "不错", "治愈"))
                 out.append("neg" if neg and not pos else "pos" if pos else "neu")
-            return json.dumps({"labels": out}, ensure_ascii=False)
+            tags = []
+            for l, line in zip(out, [x for x in user.splitlines() if x.strip()]):
+                if l != "neg": tags.append(""); continue
+                tags.append("套路老" if any(k in line for k in ("套路", "又是", "老", "新意")) else
+                            "节奏慢" if "慢" in line else "演技差" if "演技" in line else
+                            "结局烂" if any(k in line for k in ("烂尾", "崩")) else "剧情崩")
+            return json.dumps({"labels": out, "tags": tags}, ensure_ascii=False)
         # 打标
         text = user
         for kws, genre, hook, aud, era in self._RULES:
