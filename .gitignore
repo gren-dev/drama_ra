@@ -1,0 +1,6 @@
+.env
+data/radar.db
+data/snapshots/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
