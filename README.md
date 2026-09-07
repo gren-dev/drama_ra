@@ -47,6 +47,25 @@ streamlit run app/dashboard.py
 每次运行最多补抓 60 个详情页（`DETAIL_BUDGET`），首轮之后每天只有新剧需要补。
 这个站没有评论，观众反馈那页要等接上抖音/快手评论源才有数据。
 
+## 出海市场（market=global）
+
+站点左侧「市场」切到「出海」，数据来自三家海外平台的网页端（都是服务端直出，不用逆向 App）：
+
+| 源 | 文件 | 拿到什么 | 热度口径 |
+|---|---|---|---|
+| GoodShort | `crawler/sources/goodshort.py` | 10 个分类页 × 2 页：Views / Favorites / 集数 / **可用语言数** / 简介 | Views |
+| ReelShort | `crawler/sources/reelshort.py` | 首页 TOP 榜排名、New Release、十几个主题货架、Hot/New/Trending 标记 | 曝光分（位次+货架+标记） |
+| DramaBox | `crawler/sources/dramabox.py` | 首页剧名/集数/简介 | 曝光分（固定） |
+
+因为口径不同，`analysis/metrics.py` 在 market=global 且不限平台时**先在平台内算份额再合并**，各平台权重相等。
+「跨平台对比」页直接看同一题材在各平台的份额差——差异大的题材就是差异化供给的机会。
+
+出海词表在 `taxonomy_global.yaml`：标签中文（给国内编剧看），括号里是海外平台的英文说法给 LLM 对照。
+打标时按 `drama.market` 自动选词表；周报 `python -m analysis.report` 默认国内、出海各出一份。
+
+DramaWave / NetShort / FlickReels / DramaReels 还没接，照 goodshort.py 的模式加即可。
+TikTok：官方反爬极强，建议走 TikTok Creative Center（公开的热门 hashtag/视频趋势）或广告情报站的短剧素材榜，未实现。
+
 ## 接其他数据源（可选）
 
 我写代码时访问不了这些站，`dataeye.py` / `fanqie.py` 里的 URL 和 CSS 选择器是占位，要按真实页面校一遍：

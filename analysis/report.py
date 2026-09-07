@@ -47,10 +47,16 @@ def _fallback_md(kpi: dict) -> str:
     return "\n".join(lines)
 
 
-def run():
+def run(market: str = "cn"):
     init_db()
-    ctx = metrics.report_context()
-    kpi = metrics.kpi_summary()
+    ctx = metrics.report_context(market)
+    if ctx:
+        head = ("## 市场：出海短剧（ReelShort / GoodShort / DramaBox 等海外平台；读者是国内做出海内容的编剧和制片，"
+                "题材标签已是中文；各平台热度口径不同，份额已按平台归一化）\n\n"
+                if market == "global" else "## 市场：国内短剧（红果等平台）\n\n")
+        ctx = head + ctx
+    kpi = metrics.kpi_summary(market)
+    kpi["market"] = market
     llm = LLM(model=config.REPORT_MODEL)
     data = llm.chat_json(SYSTEM, ctx, max_tokens=3000, temperature=0.3) if ctx else None
     if not isinstance(data, dict) or "headline" not in data:
@@ -67,5 +73,7 @@ def run():
 
 
 if __name__ == "__main__":
+    import sys
     logging.basicConfig(level=logging.INFO)
-    print(json.dumps(run(), ensure_ascii=False, indent=2))
+    for mk in (sys.argv[1:] or ["cn", "global"]):
+        print(json.dumps(run(mk), ensure_ascii=False, indent=2))

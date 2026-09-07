@@ -21,6 +21,7 @@ def _get(key: str, default: str = "") -> str:
 DATABASE_URL = _get("DATABASE_URL", f"sqlite:///{ROOT/'data'/'radar.db'}")
 SNAPSHOT_DIR = ROOT / "data" / "snapshots"
 TAXONOMY_PATH = ROOT / "taxonomy.yaml"
+TAXONOMY_GLOBAL_PATH = ROOT / "taxonomy_global.yaml"
 
 LLM_PROVIDER = _get("LLM_PROVIDER", "mock")
 ANTHROPIC_API_KEY = _get("ANTHROPIC_API_KEY")

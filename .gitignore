@@ -4,4 +4,3 @@ data/snapshots/
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
-.DS_Store

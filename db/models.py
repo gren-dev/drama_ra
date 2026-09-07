@@ -11,6 +11,7 @@ class Drama(Base):
     __tablename__ = "drama"
     id = Column(Integer, primary_key=True)
     norm_title = Column(String(200), unique=True, index=True)  # 归一化标题，去重主键
+    market = Column(String(10), default="cn", index=True)      # cn=国内, global=出海
     title = Column(String(200))
     synopsis = Column(Text, default="")
     cover = Column(String(500), default="")

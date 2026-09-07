@@ -1,0 +1,41 @@
+# 出海短剧题材词表（面向国内编剧/制片，标签用中文，括号里是海外平台常用英文说法，打标时给 LLM 参考）
+genres:
+  - 狼人/Alpha (Werewolf, Alpha, Luna, Mate, Pack)
+  - 霸总/亿万富翁 (Billionaire, CEO, Heiress, Tycoon)
+  - 黑手党/黑帮 (Mafia, Gang, Underworld)
+  - 复仇逆袭 (Revenge, Payback, Karma)
+  - 隐藏身份/扮猪吃虎 (Hidden Identity, Playing Dumb, Secret Heir, War God)
+  - 重生/二次机会 (Rebirth, Second Chance, Time Travel, Regret)
+  - 契约/闪婚 (Contract Marriage, Fake Marriage, Paper Marriage, Arranged)
+  - 怀孕/萌宝寻亲 (Pregnancy, Baby, Twins, Secret Child)
+  - 校园青春 (Young Love, Campus, High School, Stepbrother, Bad Boy)
+  - 奇幻/龙/吸血鬼 (Dragon, Vampire, Fantasy, Magic, Genie)
+  - 末世/异能/系统 (Apocalypse, Zombie, Superpower, System, Mecha)
+  - 体育/竞技 (Hockey, Quarterback, Fighter, Sports)
+  - 家庭伦理 (Family, Divorce, Mother-in-law, Betrayal)
+  - 悬疑惊悚 (Thriller, Suspense, Serial Killer, Crime)
+  - 古装/宫廷 (Ancient, Royalty, Emperor, Nobility)
+  - 都市职场 (Urban, Workplace, Independent Woman, Glow Up)
+  - 其他
+
+hook_types:
+  - 身份反转 (identity reveal)
+  - 误会打脸 (humiliation then payback)
+  - 金手指觉醒 (power awakening / system)
+  - 亲情错认 (lost child / heir)
+  - 契约婚姻 (contract / fake marriage)
+  - 死亡重开 (rebirth / regret)
+  - 命定伴侣 (fated mate / bond)
+  - 悬念事件 (mystery / crime)
+  - 其他
+
+audience:
+  - 男频
+  - 女频
+  - 男女通吃
+
+eras:
+  - 现代
+  - 古代
+  - 架空/奇幻
+  - 末世/未来

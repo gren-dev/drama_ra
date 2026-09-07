@@ -127,7 +127,12 @@ class LLM:
                             "节奏慢" if "慢" in line else "演技差" if "演技" in line else
                             "结局烂" if any(k in line for k in ("烂尾", "崩")) else "剧情崩")
             return json.dumps({"labels": out, "tags": tags}, ensure_ascii=False)
-        # 打标
+        # 打标（批量）：system 里带 "items" 说明是批量格式
+        if '"items"' in system:
+            blocks = [b for b in user.split("### 第") if b.strip()]
+            items = [json.loads(self._mock_single(b)) for b in blocks]
+            return json.dumps({"items": items}, ensure_ascii=False)
+        # 打标（单条）
         text = user
         for kws, genre, hook, aud, era in self._RULES:
             if any(k in text for k in kws):
@@ -136,6 +141,17 @@ class LLM:
                     "hook_type": hook, "audience": aud, "era": era,
                     "tags": [k for k in kws if k in text][:3],
                     "reason": "mock 规则匹配",
+                }, ensure_ascii=False)
+        return json.dumps({"genre": "其他", "sub_genre": "", "hook_type": "其他", "audience": "男女通吃",
+                           "era": "现代", "tags": [], "reason": "mock 无匹配"}, ensure_ascii=False)
+
+    def _mock_single(self, text: str) -> str:
+        for kws, genre, hook, aud, era in self._RULES:
+            if any(k in text for k in kws):
+                return json.dumps({
+                    "genre": genre, "sub_genre": "/".join(k for k in kws if k in text)[:40],
+                    "hook_type": hook, "audience": aud, "era": era,
+                    "tags": [k for k in kws if k in text][:3], "reason": "mock 规则匹配",
                 }, ensure_ascii=False)
         return json.dumps({"genre": "其他", "sub_genre": "", "hook_type": "其他", "audience": "男女通吃",
                            "era": "现代", "tags": [], "reason": "mock 无匹配"}, ensure_ascii=False)

@@ -24,28 +24,36 @@ def week_of(ts: pd.Series) -> pd.Series:
 
 # ---------- 题材 × 周 ----------
 
-def genre_weekly(weeks: int = 8, platform: str | None = None) -> pd.DataFrame:
+def genre_weekly(weeks: int = 8, platform: str | None = None, market: str | None = None) -> pd.DataFrame:
     """每题材每周：热度(每部剧取周内均值再求和)、剧数、份额、排名。
-    platform: 只看某个数据源/榜单，如 'hongguo:AI剧'；None=全部。"""
+    platform: 只看某个数据源/榜单，如 'hongguo:AI剧'；None=全部。
+    market: cn / global / None。global 且未指定 platform 时，各平台热度口径不同（播放量 vs 曝光分），
+    先在平台内归一化成份额再合并，每个平台权重相等。"""
     df = _q("""
-        select d.id drama_id, d.genre, m.ts, m.heat
+        select d.id drama_id, d.genre, m.platform, m.ts, m.heat
         from metric_snapshot m join drama d on d.id=m.drama_id
         where d.genre is not null and m.heat is not null and m.ts >= :since
-          and (:platform is null or m.platform = :platform)""",
-            since=datetime.utcnow() - timedelta(weeks=weeks), platform=platform)
+          and (:platform is null or m.platform = :platform)
+          and (:market is null or coalesce(d.market,'cn') = :market)""",
+            since=datetime.utcnow() - timedelta(weeks=weeks), platform=platform, market=market)
     if df.empty:
         return df
     df["week"] = week_of(df.ts)
-    per_drama = df.groupby(["week", "genre", "drama_id"]).heat.mean().reset_index()
+    if market == "global" and platform is None:
+        per = df.groupby(["week", "platform", "genre", "drama_id"]).heat.mean().reset_index()
+        per["heat"] = per.heat / per.groupby(["week", "platform"]).heat.transform("sum") * 1000
+        per_drama = per.groupby(["week", "genre", "drama_id"]).heat.sum().reset_index()
+    else:
+        per_drama = df.groupby(["week", "genre", "drama_id"]).heat.mean().reset_index()
     g = per_drama.groupby(["week", "genre"]).agg(heat=("heat", "sum"), n=("drama_id", "nunique")).reset_index()
     g["share"] = g.heat / g.groupby("week").heat.transform("sum")
     g["rank"] = g.groupby("week").heat.rank(ascending=False, method="first").astype(int)
     return g.sort_values(["week", "rank"])
 
 
-def genre_momentum(platform: str | None = None) -> pd.DataFrame:
+def genre_momentum(platform: str | None = None, market: str | None = None) -> pd.DataFrame:
     """本周 vs 上周：份额、环比、剧数变化、四象限动作建议。"""
-    g = genre_weekly(8, platform)
+    g = genre_weekly(8, platform, market)
     if g.empty:
         return g
     weeks = sorted(g.week.unique())
@@ -110,15 +118,17 @@ def complaint_tags(limit: int = 20) -> pd.DataFrame:
 
 # ---------- 矩阵 ----------
 
-def hook_genre_matrix() -> pd.DataFrame:
-    df = _q("select genre, hook_type from drama where genre is not null and hook_type is not null")
+def hook_genre_matrix(market: str | None = None) -> pd.DataFrame:
+    df = _q("""select genre, hook_type from drama where genre is not null and hook_type is not null
+               and (:market is null or coalesce(market,'cn') = :market)""", market=market)
     return df.pivot_table(index="genre", columns="hook_type", aggfunc="size", fill_value=0) if not df.empty else df
 
 
-def producer_genre_matrix(min_dramas: int = 1) -> pd.DataFrame:
+def producer_genre_matrix(min_dramas: int = 1, market: str | None = None) -> pd.DataFrame:
     df = _q("""select d.producer, d.genre,
                       (select heat from metric_snapshot m where m.drama_id=d.id order by ts desc limit 1) heat
-               from drama d where d.genre is not null and d.producer is not null and d.producer<>''""")
+               from drama d where d.genre is not null and d.producer is not null and d.producer<>''
+               and (:market is null or coalesce(d.market,'cn') = :market)""", market=market)
     if df.empty:
         return df
     keep = df.producer.value_counts()
@@ -141,9 +151,32 @@ def top_movers(days: int = 7, n: int = 15) -> pd.DataFrame:
     return df.sort_values("delta_pct", ascending=False, na_position="last").head(n)
 
 
-def platforms() -> list[str]:
-    df = _q("select distinct platform from metric_snapshot order by platform")
+def platforms(market: str | None = None) -> list[str]:
+    df = _q("""select distinct m.platform from metric_snapshot m join drama d on d.id=m.drama_id
+               where (:market is null or coalesce(d.market,'cn') = :market) order by m.platform""", market=market)
     return df.platform.tolist() if not df.empty else []
+
+
+def genre_platform_share(market: str = "global") -> pd.DataFrame:
+    """题材 × 平台：各平台内的热度份额（本周），跨平台对比用。"""
+    df = _q("""
+        select d.genre, split_part(m.platform, ':', 1) as platform, m.heat, d.id drama_id
+        from metric_snapshot m join drama d on d.id=m.drama_id
+        where d.genre is not null and m.heat is not null and m.ts >= :since
+          and coalesce(d.market,'cn') = :market""",
+            since=datetime.utcnow() - timedelta(days=7), market=market) if engine.dialect.name == "postgresql" else _q("""
+        select d.genre, substr(m.platform, 1, case when instr(m.platform, ':')>0 then instr(m.platform, ':')-1 else length(m.platform) end) as platform,
+               m.heat, d.id drama_id
+        from metric_snapshot m join drama d on d.id=m.drama_id
+        where d.genre is not null and m.heat is not null and m.ts >= :since
+          and coalesce(d.market,'cn') = :market""",
+            since=datetime.utcnow() - timedelta(days=7), market=market)
+    if df.empty:
+        return df
+    per = df.groupby(["platform", "genre", "drama_id"]).heat.mean().reset_index()
+    g = per.groupby(["platform", "genre"]).heat.sum().reset_index()
+    g["share"] = g.heat / g.groupby("platform").heat.transform("sum")
+    return g.pivot_table(index="genre", columns="platform", values="share", fill_value=0)
 
 
 def cluster_history() -> pd.DataFrame:
@@ -152,8 +185,8 @@ def cluster_history() -> pd.DataFrame:
 
 # ---------- 汇总给周报 ----------
 
-def kpi_summary() -> dict:
-    m = genre_momentum()
+def kpi_summary(market: str | None = None) -> dict:
+    m = genre_momentum(market=market)
     s = genre_sentiment()
     cl = cluster_history()
     out = {}
@@ -181,10 +214,10 @@ def kpi_summary() -> dict:
     return out
 
 
-def report_context() -> str:
+def report_context(market: str | None = None) -> str:
     """给 LLM 的紧凑数据包：全是数字表，不带任何解读。"""
     parts = []
-    m = genre_momentum()
+    m = genre_momentum(market=market)
     if not m.empty:
         t = m[["genre", "share", "wow", "n", "n_delta", "rank", "rank_delta", "action"]].copy()
         t["share"] = (t.share * 100).round(1); t["wow"] = (t.wow * 100).round(1)

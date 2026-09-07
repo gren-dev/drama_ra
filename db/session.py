@@ -9,7 +9,7 @@ _url = config.DATABASE_URL
 _kw = {"future": True}
 if _url.startswith("postgres"):
     _url = _url.replace("postgres://", "postgresql://", 1)
-    _kw.update(pool_pre_ping=True, pool_size=3, max_overflow=2)
+    _kw.update(pool_pre_ping=True, pool_size=3, max_overflow=2, pool_recycle=300)
 engine = create_engine(_url, **_kw)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 

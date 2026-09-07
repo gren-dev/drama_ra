@@ -39,14 +39,17 @@ class DramaItem:
     likes: Optional[int] = None
     comments_cnt: Optional[int] = None
     comments: list = field(default_factory=list)   # [{"text":..., "likes":...}]
+    market: str = "cn"                              # cn / global
 
 
 def normalize_title(t: str) -> str:
     """去重键：去书名号/空白/标点/“第X季”等后缀，统一小写。"""
     t = t.strip()
+    t = re.sub(r"^\[[^\]]{2,12}\]\s*", "", t)          # [ENG DUB] / [ES] 前缀
     t = re.sub(r"[《》【】\[\]（）()\s]", "", t)
     t = re.sub(r"(第[一二三四五六七八九十\d]+[季部集]|完结篇|全集|短剧)$", "", t)
-    t = re.sub(r"[:：\-—_·,，。!！?？]", "", t)
+    t = re.sub(r"[:：\-—_·,，。!！?？'’\"“”.]", "", t)
+    t = re.sub(r"(season\d+|s\d+|final)$", "", t)
     return t.lower()
 
 
@@ -137,7 +140,7 @@ def ingest(session, items: Iterable[DramaItem]) -> dict:
         drama = session.query(Drama).filter_by(norm_title=key).one_or_none()
         if drama is None:
             drama = Drama(norm_title=key, title=it.title.strip(), synopsis=it.synopsis,
-                          cover=it.cover, producer=it.producer, first_seen=now)
+                          cover=it.cover, producer=it.producer, first_seen=now, market=it.market)
             session.add(drama)
             session.flush()
             stats["new"] += 1

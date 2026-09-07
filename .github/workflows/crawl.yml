@@ -23,15 +23,17 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Install Chromium (only needed for real sources)
-        run: python -m playwright install --with-deps chromium
-      - name: Crawl + tag + sentiment
-        run: |
-          python -m crawler.run
-          python -m analysis.tagger
-          python -m analysis.sentiment
-      - name: Weekly cluster + report
-        if: github.event.schedule == '0 0 * * 1' || github.event_name == 'workflow_dispatch'
-        run: |
-          python -m analysis.cluster
-          python -m analysis.report
+      - name: Crawl (GoodShort only for now)
+        run: python -m crawler.run
+      - name: Tag (batched)
+        run: python -m analysis.tagger
+      # 数据采集稳定后再打开：
+      # - name: Tag + sentiment
+      #   run: |
+      #     python -m analysis.tagger
+      #     python -m analysis.sentiment
+      # - name: Weekly cluster + report
+      #   if: github.event.schedule == '0 0 * * 1' || github.event_name == 'workflow_dispatch'
+      #   run: |
+      #     python -m analysis.cluster
+      #     python -m analysis.report

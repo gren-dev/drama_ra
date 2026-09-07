@@ -32,19 +32,21 @@ def load_dramas() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def m_weekly(platform=None): return metrics.genre_weekly(8, platform)
+def m_weekly(platform=None, market=None): return metrics.genre_weekly(8, platform, market)
 @st.cache_data(ttl=300)
-def m_momentum(platform=None): return metrics.genre_momentum(platform)
+def m_momentum(platform=None, market=None): return metrics.genre_momentum(platform, market)
 @st.cache_data(ttl=300)
-def m_platforms(): return metrics.platforms()
+def m_platforms(market=None): return metrics.platforms(market)
+@st.cache_data(ttl=300)
+def m_platform_share(market="global"): return metrics.genre_platform_share(market)
 @st.cache_data(ttl=300)
 def m_sent(): return metrics.genre_sentiment()
 @st.cache_data(ttl=300)
 def m_tags(): return metrics.complaint_tags(15)
 @st.cache_data(ttl=300)
-def m_hook(): return metrics.hook_genre_matrix()
+def m_hook(market=None): return metrics.hook_genre_matrix(market)
 @st.cache_data(ttl=300)
-def m_producer(): return metrics.producer_genre_matrix()
+def m_producer(market=None): return metrics.producer_genre_matrix(market=market)
 @st.cache_data(ttl=300)
 def m_movers(): return metrics.top_movers()
 @st.cache_data(ttl=300)
@@ -57,10 +59,13 @@ def pct(x, signed=False):
     return f"{x:+.0%}" if signed else f"{x:.0%}"
 
 
-def latest_report():
+def latest_report(market="cn"):
     with session_scope() as s:
-        r = s.query(Report).order_by(Report.created_at.desc()).first()
-        return (r.content_json or {}) if r else {}
+        for r in s.query(Report).order_by(Report.created_at.desc()).limit(20):
+            j = r.content_json or {}
+            if (j.get("kpi") or {}).get("market", "cn") == market:
+                return j
+        return {}
 
 
 def quadrant_chart(m: pd.DataFrame):
@@ -118,19 +123,30 @@ def share_area(g: pd.DataFrame, top=8):
     st.plotly_chart(fig, width="stretch")
 
 
-df = load_dramas()
+df_all = load_dramas()
 st.sidebar.title("📡 短剧题材雷达")
-page = st.sidebar.radio("页面", ["总览", "题材趋势", "观众反馈", "新兴题材", "出品方", "剧集库", "AI 周报"])
-_plats = m_platforms()
-_labels = {None: "全部数据源"} | {p: p.replace("hongguo:", "红果·").replace("duanjubaike", "短剧百科").replace("sample", "样例") for p in _plats}
+market = st.sidebar.radio("市场", ["cn", "global"], format_func=lambda x: {"cn": "国内（红果等）", "global": "出海（ReelShort 等）"}[x], horizontal=True)
+df = df_all[df_all.market.fillna("cn") == market].reset_index(drop=True)
+PAGES = ["总览", "题材趋势", "跨平台对比", "观众反馈", "新兴题材", "出品方", "剧集库", "AI 周报"]
+if market == "cn":
+    PAGES.remove("跨平台对比")
+page = st.sidebar.radio("页面", PAGES)
+_plats = m_platforms(market)
+PLAT_NAMES = {"hongguo:": "红果·", "duanjubaike": "短剧百科", "sample": "样例", "goodshort": "GoodShort",
+              "reelshort": "ReelShort", "dramabox": "DramaBox", "flickreels": "FlickReels", "netshort": "NetShort"}
+def _plat_label(p):
+    for k, v in PLAT_NAMES.items():
+        p = p.replace(k, v)
+    return p
+_labels = {None: "全部数据源"} | {p: _plat_label(p) for p in _plats}
 scope = st.sidebar.selectbox("数据范围", list(_labels), format_func=lambda x: _labels[x],
                              help="选一个榜单只看它，例如「红果·AI剧」只看 AI 短剧的题材动量")
 st.sidebar.caption(f"库内 {len(df)} 部剧 · 已打标 {df.tagged_at.notna().sum()} 部")
 
 # ================= 总览 =================
 if page == "总览":
-    m, s, rep = m_momentum(scope), m_sent(), latest_report()
-    kpi = (rep.get("kpi") if scope is None else None) or metrics.kpi_summary()
+    m, s, rep = m_momentum(scope, market), m_sent(), latest_report(market)
+    kpi = (rep.get("kpi") if scope is None else None) or metrics.kpi_summary(market)
     if scope is not None and not m.empty:
         # 切了范围就现算 KPI，不用周报里的全局值
         valid = m.dropna(subset=["wow"])
@@ -144,6 +160,8 @@ if page == "总览":
         theme.headline(rep["headline"], f"{kpi.get('week', '')} · 数据来自 {len(df)} 部剧的热度与评论")
     elif scope is not None:
         theme.headline(f"{_labels[scope]} · 题材动量", f"{kpi.get('week', '')} · 只统计该榜单的热度")
+    elif market == "global":
+        theme.headline("出海市场 · 题材动量", f"{kpi.get('week', '')} · {len(df)} 部剧 · 各平台热度口径不同，已按平台归一化后合并")
 
     c1, c2, c3, c4 = st.columns(4)
     theme.kpi(c1, "总热度周环比", pct(kpi.get("total_wow"), True))
@@ -187,7 +205,7 @@ if page == "总览":
 # ================= 题材趋势 =================
 elif page == "题材趋势":
     st.title("题材热度趋势")
-    g = m_weekly(scope)
+    g = m_weekly(scope, market)
     if g.empty:
         st.info("还没有指标数据，先跑 `python pipeline.py`")
     else:
@@ -202,10 +220,31 @@ elif page == "题材趋势":
                          .rename(columns={"title": "剧名", "genre": "题材", "sub_genre": "子题材", "producer": "出品",
                                           "cur_heat": "当前热度", "delta_pct": "环比"}), width="stretch", hide_index=True)
         st.subheader("钩子 × 题材")
-        hk = m_hook()
+        hk = m_hook(market)
         if not hk.empty:
             st.plotly_chart(px.imshow(hk, text_auto=True, aspect="auto", color_continuous_scale=[[0, "#182238"], [1, COOL]],
                                       labels=dict(color="剧数")).update_layout(height=420), width="stretch")
+
+# ================= 跨平台对比 =================
+elif page == "跨平台对比":
+    st.title("同一题材，各平台押注差多少")
+    ps = m_platform_share("global")
+    if ps.empty:
+        st.info("还没有出海平台数据：`python -m crawler.run goodshort reelshort dramabox` 然后打标")
+    else:
+        ps = ps.loc[ps.sum(axis=1).sort_values(ascending=False).index]
+        ps.columns = [_plat_label(c) for c in ps.columns]
+        fig = px.imshow(ps * 100, text_auto=".0f", aspect="auto", color_continuous_scale=[[0, "#182238"], [1, COOL]],
+                        labels=dict(color="份额 %"))
+        fig.update_layout(height=max(380, 34 * len(ps)), coloraxis_showscale=False)
+        st.plotly_chart(fig, width="stretch")
+        st.caption("每列在平台内求份额（GoodShort 用播放量，ReelShort/DramaBox 用曝光分），所以横向可比：同一题材哪家在推、哪家没碰。")
+        if ps.shape[1] >= 2:
+            gap = (ps.max(axis=1) - ps.min(axis=1)).sort_values(ascending=False).head(8)
+            st.subheader("平台分歧最大的题材")
+            rows = "".join(f"<li><b>{g}</b>：{ps.loc[g].idxmax()} {ps.loc[g].max():.0%} vs {ps.loc[g].idxmin()} {ps.loc[g].min():.0%}</li>" for g in gap.index)
+            st.markdown(f'<ul class="dr-list">{rows}</ul>', unsafe_allow_html=True)
+            st.caption("分歧大 = 有平台验证过这个题材能跑、另一家还没上量，是差异化供给的机会点。")
 
 # ================= 观众反馈 =================
 elif page == "观众反馈":
@@ -260,7 +299,7 @@ elif page == "新兴题材":
 # ================= 出品方 =================
 elif page == "出品方":
     st.title("谁在押什么题材")
-    pm = m_producer()
+    pm = m_producer(market)
     if pm.empty:
         st.info("没有出品方数据")
     else:
@@ -309,6 +348,7 @@ else:
         if not reps:
             st.info("还没生成周报：`python -m analysis.report`")
         else:
+            reps = [r for r in reps if ((r.content_json or {}).get("kpi") or {}).get("market", "cn") == market] or reps
             r = st.selectbox("选择周报", reps, format_func=lambda x: f"{x.week} · {x.created_at:%m-%d %H:%M} · {x.model}")
             j = r.content_json or {}
             if j.get("headline"):

@@ -21,22 +21,27 @@ def run():
     init_db()
     llm = LLM()
     with session_scope() as s:
-        rows = s.query(Comment).filter(Comment.sentiment.is_(None)).all()
-        for i in range(0, len(rows), BATCH):
-            batch = rows[i:i + BATCH]
-            out = llm.chat_json(SYSTEM, "\n".join(c.text.replace("\n", " ") for c in batch), max_tokens=2000)
-            labels = (out or {}).get("labels") or []
-            tags = (out or {}).get("tags") or [""] * len(labels)
-            if len(labels) != len(batch):
-                log.warning("label count mismatch %d vs %d", len(labels), len(batch))
-                continue
-            if len(tags) != len(batch):
-                tags = [""] * len(batch)
-            for c, l, t in zip(batch, labels, tags):
+        ids = [i for (i,) in s.query(Comment.id).filter(Comment.sentiment.is_(None)).order_by(Comment.id)]
+    total = 0
+    for i in range(0, len(ids), BATCH):
+        batch_ids = ids[i:i + BATCH]
+        with session_scope() as s:
+            texts = [c.text.replace("\n", " ") for c in s.query(Comment).filter(Comment.id.in_(batch_ids)).order_by(Comment.id)]
+        out = llm.chat_json(SYSTEM, "\n".join(texts), max_tokens=2000)
+        labels = (out or {}).get("labels") or []
+        tags = (out or {}).get("tags") or [""] * len(labels)
+        if len(labels) != len(batch_ids):
+            log.warning("label count mismatch %d vs %d", len(labels), len(batch_ids))
+            continue
+        if len(tags) != len(batch_ids):
+            tags = [""] * len(batch_ids)
+        with session_scope() as s:
+            rows = s.query(Comment).filter(Comment.id.in_(batch_ids)).order_by(Comment.id).all()
+            for c, l, t in zip(rows, labels, tags):
                 c.sentiment = l if l in ("pos", "neg", "neu") else "neu"
                 c.complaint_tag = (str(t) or "")[:50] if c.sentiment == "neg" else None
-            s.commit()
-        log.info("sentiment done: %d comments", len(rows))
+        total += len(batch_ids)
+    log.info("sentiment done: %d comments", total)
 
 
 if __name__ == "__main__":
