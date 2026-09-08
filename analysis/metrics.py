@@ -151,6 +151,75 @@ def top_movers(days: int = 7, n: int = 15) -> pd.DataFrame:
     return df.sort_values("delta_pct", ascending=False, na_position="last").head(n)
 
 
+def engagement_by_genre(market: str | None = None) -> pd.DataFrame:
+    """涨粉效率 = 关注/播放量（likes/heat），按题材聚合。越高说明这个题材更容易把路人变粉丝。"""
+    df = _q("""
+        select d.genre, m.heat, m.likes
+        from metric_snapshot m join drama d on d.id=m.drama_id
+        where d.genre is not null and m.heat is not null and m.heat > 0 and m.likes is not null
+          and (:market is null or coalesce(d.market,'cn') = :market)""", market=market)
+    if df.empty:
+        return df
+    df["rate"] = df.likes / df.heat
+    out = df.groupby("genre").agg(rate=("rate", "mean"), n=("genre", "size")).reset_index()
+    return out.sort_values("rate", ascending=False)
+
+
+def native_tags(platform: str, top: int = 25) -> pd.DataFrame:
+    """平台自己打的原生标签排行（剔除我们自己拼的 派生标签，如 'GoodShort:xxx'、'N集'、'评分x'、'收藏:x'、'主演:x'）。
+    这些标签比通用题材词表细得多，是平台自己的题材切法。"""
+    from db.session import session_scope
+    from db.models import PlatformListing
+    import re
+    skip_pat = re.compile(r"^(GoodShort:|评分|收藏:|主演:|\d+集$|红果|DramaBox:|FlickReels:|NetShort:)")
+    with session_scope() as s:
+        rows = s.query(PlatformListing.raw_tags).filter_by(platform=platform).all()
+    counts: dict[str, int] = {}
+    for (tags,) in rows:
+        for t in (tags or []):
+            if not t or skip_pat.match(str(t)):
+                continue
+            counts[t] = counts.get(t, 0) + 1
+    if not counts:
+        return pd.DataFrame(columns=["tag", "n"])
+    out = pd.DataFrame(sorted(counts.items(), key=lambda x: -x[1])[:top], columns=["tag", "n"])
+    return out
+
+
+def episodes_vs_heat(platform: str) -> pd.DataFrame:
+    """集数 × 热度：判断这个平台是短集数还是长集数更容易起量。"""
+    from db.session import session_scope
+    from db.models import PlatformListing, Drama
+    import re
+    with session_scope() as s:
+        rows = (s.query(PlatformListing.raw_tags, Drama.genre, Drama.title,
+                        Drama.id)
+                .join(Drama, Drama.id == PlatformListing.drama_id)
+                .filter(PlatformListing.platform == platform).all())
+    recs = []
+    ep_pat = re.compile(r"^(\d+)集$")
+    for tags, genre, title, did in rows:
+        eps = None
+        for t in (tags or []):
+            m = ep_pat.match(str(t))
+            if m:
+                eps = int(m.group(1)); break
+        if eps:
+            recs.append({"drama_id": did, "title": title, "genre": genre, "episodes": eps})
+    if not recs:
+        return pd.DataFrame()
+    df = pd.DataFrame(recs)
+    heat = _q("""select drama_id, max(heat) heat from metric_snapshot where drama_id in :ids group by drama_id""",
+             ) if False else None
+    # 用 IN 子句手写，避免依赖 SQLAlchemy 的 in_ 展开在原生 SQL 字符串里的写法差异
+    ids = tuple(df.drama_id.tolist())
+    if not ids:
+        return pd.DataFrame()
+    placeholder = ",".join(str(i) for i in ids)
+    heat_df = pd.read_sql(f"select drama_id, max(heat) as heat from metric_snapshot where drama_id in ({placeholder}) group by drama_id", engine)
+    return df.merge(heat_df, on="drama_id", how="left").dropna(subset=["heat"])
+
+
 def platforms(market: str | None = None) -> list[str]:
     df = _q("""select distinct m.platform from metric_snapshot m join drama d on d.id=m.drama_id
                where (:market is null or coalesce(d.market,'cn') = :market) order by m.platform""", market=market)

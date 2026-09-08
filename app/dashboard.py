@@ -48,6 +48,12 @@ def m_hook(market=None): return metrics.hook_genre_matrix(market)
 @st.cache_data(ttl=300)
 def m_producer(market=None): return metrics.producer_genre_matrix(market=market)
 @st.cache_data(ttl=300)
+def m_engagement(market=None): return metrics.engagement_by_genre(market)
+@st.cache_data(ttl=300)
+def m_native_tags(platform): return metrics.native_tags(platform)
+@st.cache_data(ttl=300)
+def m_episodes_heat(platform): return metrics.episodes_vs_heat(platform)
+@st.cache_data(ttl=300)
 def m_movers(): return metrics.top_movers()
 @st.cache_data(ttl=300)
 def m_clusters(): return metrics.cluster_history()
@@ -124,24 +130,42 @@ def share_area(g: pd.DataFrame, top=8):
 
 
 df_all = load_dramas()
-st.sidebar.title("📡 短剧题材雷达")
-market = st.sidebar.radio("市场", ["cn", "global"], format_func=lambda x: {"cn": "国内（红果等）", "global": "出海（ReelShort 等）"}[x], horizontal=True)
+theme.brand()
+
+_all_markets = sorted(df_all.market.fillna("cn").unique().tolist()) if not df_all.empty else ["cn"]
+_market_names = {"cn": "国内", "global": "出海"}
+if len(_all_markets) > 1:
+    market = st.sidebar.radio("市场", _all_markets, format_func=lambda x: _market_names.get(x, x), horizontal=True)
+else:
+    market = _all_markets[0]
+
 df = df_all[df_all.market.fillna("cn") == market].reset_index(drop=True)
-PAGES = ["总览", "题材趋势", "跨平台对比", "观众反馈", "新兴题材", "出品方", "剧集库", "AI 周报"]
-if market == "cn":
-    PAGES.remove("跨平台对比")
-page = st.sidebar.radio("页面", PAGES)
-_plats = m_platforms(market)
 PLAT_NAMES = {"hongguo:": "红果·", "duanjubaike": "短剧百科", "sample": "样例", "goodshort": "GoodShort",
               "reelshort": "ReelShort", "dramabox": "DramaBox", "flickreels": "FlickReels", "netshort": "NetShort"}
 def _plat_label(p):
     for k, v in PLAT_NAMES.items():
         p = p.replace(k, v)
     return p
-_labels = {None: "全部数据源"} | {p: _plat_label(p) for p in _plats}
-scope = st.sidebar.selectbox("数据范围", list(_labels), format_func=lambda x: _labels[x],
-                             help="选一个榜单只看它，例如「红果·AI剧」只看 AI 短剧的题材动量")
-st.sidebar.caption(f"库内 {len(df)} 部剧 · 已打标 {df.tagged_at.notna().sum()} 部")
+_plats = m_platforms(market)
+
+PAGES = ["总览", "题材趋势", "跨平台对比", "观众反馈", "新兴题材", "出品方", "剧集库", "AI 周报"]
+if len(_plats) < 2:
+    PAGES.remove("跨平台对比")   # 只有一个数据源时，跨平台对比没有意义
+PAGE_ICONS = {"总览": "◈", "题材趋势": "📈", "跨平台对比": "⇄", "观众反馈": "💬",
+             "新兴题材": "✦", "出品方": "🏭", "剧集库": "🗂", "AI 周报": "🤖"}
+page = st.sidebar.radio("页面", PAGES, format_func=lambda x: f"{PAGE_ICONS.get(x, '')}  {x}")
+
+if len(_plats) > 1:
+    _labels = {None: "全部数据源"} | {p: _plat_label(p) for p in _plats}
+    scope = st.sidebar.selectbox("数据范围", list(_labels), format_func=lambda x: _labels[x],
+                                 help="选一个榜单只看它")
+else:
+    scope = None   # 单一数据源，不用选
+
+_src_line = _plat_label(_plats[0]) if len(_plats) == 1 else f"{len(_plats)} 个数据源"
+_last = pd.read_sql("select max(ts) as ts from metric_snapshot", engine).ts.iloc[0]
+_last_str = pd.to_datetime(_last).tz_localize("UTC").tz_convert("Asia/Shanghai").strftime("%m-%d %H:%M") if pd.notna(_last) else "—"
+theme.freshness(st.sidebar, _last_str, f"{_src_line} · {len(df)} 部剧 · 已打标 {df.tagged_at.notna().sum()} 部")
 
 # ================= 总览 =================
 if page == "总览":
@@ -207,7 +231,7 @@ elif page == "题材趋势":
     st.title("题材热度趋势")
     g = m_weekly(scope, market)
     if g.empty:
-        st.info("还没有指标数据，先跑 `python pipeline.py`")
+        theme.empty_state("还没有热度数据 — 先跑一次 <code>python pipeline.py</code> 采集")
     else:
         share_area(g)
         bump_chart(g)
@@ -215,7 +239,7 @@ elif page == "题材趋势":
         tm = m_movers()
         if not tm.empty:
             t = tm.copy(); t["delta_pct"] = t.delta_pct.map(lambda x: pct(x, True))
-            t["cur_heat"] = t.cur_heat.map(lambda x: f"{x/1e4:.0f}万")
+            t["cur_heat"] = t.cur_heat.map(theme.fmt_num)
             st.dataframe(t[["title", "genre", "sub_genre", "producer", "cur_heat", "delta_pct"]]
                          .rename(columns={"title": "剧名", "genre": "题材", "sub_genre": "子题材", "producer": "出品",
                                           "cur_heat": "当前热度", "delta_pct": "环比"}), width="stretch", hide_index=True)
@@ -224,6 +248,27 @@ elif page == "题材趋势":
         if not hk.empty:
             st.plotly_chart(px.imshow(hk, text_auto=True, aspect="auto", color_continuous_scale=[[0, "#182238"], [1, COOL]],
                                       labels=dict(color="剧数")).update_layout(height=420), width="stretch")
+
+        if len(_plats) == 1:
+            c1, c2 = st.columns(2)
+            with c1:
+                eg = m_engagement(market)
+                if not eg.empty:
+                    fig = px.bar(eg.head(12), x="rate", y="genre", orientation="h", title="涨粉效率（关注/播放量）",
+                                labels={"rate": "", "genre": ""}, text=eg.head(12).rate.map(lambda x: f"{x:.1%}"))
+                    fig.update_traces(marker_color=SURFACE2, marker_line_color=GOOD, marker_line_width=1.5, textposition="outside")
+                    fig.update_layout(height=420, xaxis=dict(showgrid=False, visible=False, tickformat=".0%"), yaxis=dict(showgrid=False))
+                    st.plotly_chart(fig, width="stretch")
+                    st.caption("同样的播放量，涨粉效率高的题材更容易把路人变成回头粉，不只是一次性热度。")
+            with c2:
+                ev = m_episodes_heat(_plats[0])
+                if not ev.empty:
+                    fig = px.scatter(ev, x="episodes", y="heat", color="genre", hover_name="title",
+                                     labels={"episodes": "集数", "heat": "播放量"}, title="集数 × 播放量")
+                    fig.update_yaxes(type="log")
+                    fig.update_layout(height=420, legend=dict(orientation="h", y=-0.25))
+                    st.plotly_chart(fig, width="stretch")
+                    st.caption("对数坐标；看集数落在哪个区间的剧更容易冲量，供选题参考。")
 
 # ================= 跨平台对比 =================
 elif page == "跨平台对比":
@@ -251,7 +296,7 @@ elif page == "观众反馈":
     st.title("观众在吐槽什么")
     s = m_sent()
     if s.empty:
-        st.info("还没有评论情感数据：`python -m analysis.sentiment`")
+        theme.empty_state("还没有评论情感数据 — 跑 <code>python -m analysis.sentiment</code>")
     else:
         c1, c2 = st.columns(2)
         with c1:
@@ -279,9 +324,18 @@ elif page == "观众反馈":
 # ================= 新兴题材 =================
 elif page == "新兴题材":
     st.title("新兴题材雷达（聚类发现）")
+    if len(_plats) == 1:
+        nt = m_native_tags(_plats[0])
+        if not nt.empty:
+            st.subheader(f"{_plat_label(_plats[0])} 原生标签排行")
+            st.caption("平台自己打的标签，比通用题材词表细得多——比现成的 16 个大类更看得出细分方向。")
+            fig = px.bar(nt.sort_values("n"), x="n", y="tag", orientation="h", labels={"n": "剧数", "tag": ""})
+            fig.update_traces(marker_color=SURFACE2, marker_line_color=theme.VIOLET, marker_line_width=1.5)
+            fig.update_layout(height=max(360, 22 * len(nt)), xaxis=dict(showgrid=False), yaxis=dict(showgrid=False))
+            st.plotly_chart(fig, width="stretch")
     cl = m_clusters()
     if cl.empty:
-        st.info("还没跑过聚类：`python -m analysis.cluster`")
+        theme.empty_state("还没跑过聚类 — 跑 <code>python -m analysis.cluster</code>")
     else:
         if cl.week.nunique() > 1:
             st.plotly_chart(px.line(cl, x="week", y="size", color="label", markers=True, title="各簇规模变化")
@@ -301,7 +355,7 @@ elif page == "出品方":
     st.title("谁在押什么题材")
     pm = m_producer(market)
     if pm.empty:
-        st.info("没有出品方数据")
+        theme.empty_state("暂无出品方数据")
     else:
         st.plotly_chart(px.imshow(pm / 1e4, text_auto=".0f", aspect="auto", color_continuous_scale=[[0, "#182238"], [1, ACCENT]],
                                   labels=dict(color="热度(万)")).update_layout(height=max(320, 40 * len(pm))),
@@ -319,8 +373,21 @@ elif page == "剧集库":
     if g: view = view[view.genre.isin(g)]
     if a: view = view[view.audience.isin(a)]
     if kw: view = view[view.title.str.contains(kw, na=False) | view.synopsis.str.contains(kw, na=False)]
-    st.dataframe(view[["title", "genre", "sub_genre", "hook_type", "audience", "era", "heat", "producer"]],
-                 width="stretch", hide_index=True)
+    _spark_view = view.head(80)   # 限制行数，避免一次查太多历史拖慢页面
+    if not _spark_view.empty:
+        _ids = tuple(int(i) for i in _spark_view.id)
+        _hist = pd.read_sql(text(f"select drama_id, ts, heat from metric_snapshot where drama_id in "
+                                 f"({','.join(str(i) for i in _ids)}) order by drama_id, ts"), engine)
+        _trend = _hist.groupby("drama_id").heat.apply(list).to_dict()
+        _spark_view = _spark_view.copy()
+        _spark_view["热度趋势"] = _spark_view.id.map(lambda i: _trend.get(i, []))
+        st.dataframe(
+            _spark_view[["title", "genre", "sub_genre", "hook_type", "audience", "era", "heat", "热度趋势", "producer"]],
+            width="stretch", hide_index=True,
+            column_config={"热度趋势": st.column_config.LineChartColumn("热度趋势", width="small")})
+    else:
+        st.dataframe(view[["title", "genre", "sub_genre", "hook_type", "audience", "era", "heat", "producer"]],
+                     width="stretch", hide_index=True)
     pick = st.selectbox("查看详情", view.title.tolist())
     if pick:
         row = view[view.title == pick].iloc[0]
@@ -346,7 +413,7 @@ else:
     with session_scope() as s:
         reps = s.query(Report).order_by(Report.created_at.desc()).all()
         if not reps:
-            st.info("还没生成周报：`python -m analysis.report`")
+            theme.empty_state("还没生成周报 — 跑 <code>python -m analysis.report</code>")
         else:
             reps = [r for r in reps if ((r.content_json or {}).get("kpi") or {}).get("market", "cn") == market] or reps
             r = st.selectbox("选择周报", reps, format_func=lambda x: f"{x.week} · {x.created_at:%m-%d %H:%M} · {x.model}")
