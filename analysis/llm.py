@@ -38,10 +38,16 @@ class LLM:
                 log.warning("OPENAI_COMPAT_API_KEY 为空，回退到 mock")
                 self.provider = "mock"
             else:
-                from openai import OpenAI
-                self.client = OpenAI(api_key=config.OPENAI_COMPAT_API_KEY,
-                                     base_url=config.OPENAI_COMPAT_BASE_URL)
                 self.model = model or config.OPENAI_COMPAT_MODEL
+                try:                     # 本地工作台有共享包：重试、费用记账、日志都在那边
+                    from dramakit.llm import LLMClient
+                    self.kit = LLMClient("drama_radar", api_key=config.OPENAI_COMPAT_API_KEY,
+                                         base_url=config.OPENAI_COMPAT_BASE_URL, model=self.model)
+                except ImportError:      # Streamlit Cloud / Actions 没装共享包：直连
+                    self.kit = None
+                    from openai import OpenAI
+                    self.client = OpenAI(api_key=config.OPENAI_COMPAT_API_KEY,
+                                         base_url=config.OPENAI_COMPAT_BASE_URL)
         if self.provider == "mock":
             self.model = "mock"
 
@@ -52,6 +58,9 @@ class LLM:
                 system=system, messages=[{"role": "user", "content": user}])
             return "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
         if self.provider == "openai_compat":
+            if getattr(self, "kit", None) is not None:
+                return self.kit.chat(system, user, max_tokens=max_tokens, temperature=temperature,
+                                     json_mode="json" in system.lower(), tag="radar")
             kwargs = dict(model=self.model, max_tokens=max_tokens, temperature=temperature,
                           messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
             if "json" in system.lower():

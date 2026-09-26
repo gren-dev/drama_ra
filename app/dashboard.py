@@ -14,7 +14,7 @@ from sqlalchemy import text
 from db.session import engine, init_db, session_scope
 from db.models import Cluster, Report
 from analysis import metrics
-from app import theme
+from app import theme, actions
 from app.theme import ACTION_COLOR, ACCENT, GOOD, COOL, MUTED, LINE, TEXT, SURFACE2
 
 init_db()
@@ -77,7 +77,8 @@ def latest_report(market="cn"):
 def quadrant_chart(m: pd.DataFrame):
     m = m.dropna(subset=["wow"]).copy() if "wow" in m.columns else pd.DataFrame()
     if m.empty:
-        st.info("需要至少两周数据才能算环比。样例数据可跑 `python scripts/seed_history.py`。")
+        actions.action("需要至少两周数据才能算环比。先用样例数据回填几周历史，看看图长什么样。",
+                       "生成样例历史数据", ["scripts/seed_history.py"], key="seed_quadrant")
         return
     m["wow_pct"], m["share_pct"] = m.wow * 100, m.share * 100
     fig = px.scatter(m, x="share_pct", y="wow_pct", size="n", color="action", text="genre",
@@ -153,7 +154,7 @@ if len(_plats) < 2:
     PAGES.remove("跨平台对比")   # 只有一个数据源时，跨平台对比没有意义
 PAGE_ICONS = {"总览": "◈", "题材趋势": "📈", "跨平台对比": "⇄", "观众反馈": "💬",
              "新兴题材": "✦", "出品方": "🏭", "剧集库": "🗂", "AI 周报": "🤖"}
-page = st.sidebar.radio("页面", PAGES, format_func=lambda x: f"{PAGE_ICONS.get(x, '')}  {x}")
+page = st.sidebar.radio("页面", PAGES)     # 统一设计系统下不用彩色 emoji 做图标
 
 if len(_plats) > 1:
     _labels = {None: "全部数据源"} | {p: _plat_label(p) for p in _plats}
@@ -224,14 +225,15 @@ if page == "总览":
             if acts:
                 st.markdown('<ol class="dr-list">' + "".join(f"<li>{a}</li>" for a in acts) + "</ol>", unsafe_allow_html=True)
             else:
-                st.caption("还没生成周报：`python -m analysis.report`")
+                actions.action("还没生成周报。", "生成本周周报", ["-m", "analysis.report"], key="report_overview")
 
 # ================= 题材趋势 =================
 elif page == "题材趋势":
     st.title("题材热度趋势")
     g = m_weekly(scope, market)
     if g.empty:
-        theme.empty_state("还没有热度数据 — 先跑一次 <code>python pipeline.py</code> 采集")
+        actions.action("还没有热度数据。先采集一次：抓榜单、打标、情感、聚类、周报一次跑完，需要几分钟。",
+                       "采集并分析一次", ["pipeline.py"], key="pipeline_trend")
     else:
         share_area(g)
         bump_chart(g)
@@ -275,7 +277,8 @@ elif page == "跨平台对比":
     st.title("同一题材，各平台押注差多少")
     ps = m_platform_share("global")
     if ps.empty:
-        st.info("还没有出海平台数据：`python -m crawler.run goodshort reelshort dramabox` 然后打标")
+        actions.action("还没有出海平台数据。先抓一次榜单，再回到总览做打标。",
+                       "采集出海平台榜单", ["-m", "crawler.run"], key="crawl_platform")
     else:
         ps = ps.loc[ps.sum(axis=1).sort_values(ascending=False).index]
         ps.columns = [_plat_label(c) for c in ps.columns]
@@ -296,7 +299,7 @@ elif page == "观众反馈":
     st.title("观众在吐槽什么")
     s = m_sent()
     if s.empty:
-        theme.empty_state("还没有评论情感数据 — 跑 <code>python -m analysis.sentiment</code>")
+        actions.action("还没有评论情感数据。", "分析评论情感", ["-m", "analysis.sentiment"], key="sentiment")
     else:
         c1, c2 = st.columns(2)
         with c1:
@@ -335,7 +338,7 @@ elif page == "新兴题材":
             st.plotly_chart(fig, width="stretch")
     cl = m_clusters()
     if cl.empty:
-        theme.empty_state("还没跑过聚类 — 跑 <code>python -m analysis.cluster</code>")
+        actions.action("还没跑过聚类。聚类会从已打标的剧里发现词表外的新题材。", "发现新兴题材", ["-m", "analysis.cluster"], key="cluster")
     else:
         if cl.week.nunique() > 1:
             st.plotly_chart(px.line(cl, x="week", y="size", color="label", markers=True, title="各簇规模变化")
@@ -413,7 +416,7 @@ else:
     with session_scope() as s:
         reps = s.query(Report).order_by(Report.created_at.desc()).all()
         if not reps:
-            theme.empty_state("还没生成周报 — 跑 <code>python -m analysis.report</code>")
+            actions.action("还没生成周报。周报会读取近期变化最大的数据，由 LLM 写成编剧建议。", "生成本周周报", ["-m", "analysis.report"], key="report_page")
         else:
             reps = [r for r in reps if ((r.content_json or {}).get("kpi") or {}).get("market", "cn") == market] or reps
             r = st.selectbox("选择周报", reps, format_func=lambda x: f"{x.week} · {x.created_at:%m-%d %H:%M} · {x.model}")

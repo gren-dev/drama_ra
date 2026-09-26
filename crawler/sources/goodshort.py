@@ -28,6 +28,7 @@ CATEGORIES = {
 }
 PAGES = 2
 DETAIL_BUDGET = 60
+MIN_ALL_ITEMS = 10      # All 分类两页正常 40+；低于这个数视为解析失效
 
 RE_ID = re.compile(r"/drama/([a-z0-9\-]+?)-(\d{6,})", re.I)
 RE_TAG = re.compile(r"/tag/([a-z0-9\-]+)-playlets-videos", re.I)
@@ -36,6 +37,7 @@ RE_VIEWS = re.compile(r"Views\s*([\d.]+)\s*([KMB])?", re.I)
 RE_FOLLOWERS = re.compile(r"Followers\s*([\d.]+)\s*([KMB])?", re.I)
 RE_EPCOUNT = re.compile(r"EP\.(\d+)")
 RE_ACTOR = re.compile(r"/actor/")
+RE_TITLE_GENRE = re.compile(r"-\s*([A-Za-z+\-]+)\s+Short Film\s*-", re.I)
 
 
 def _num(v: str, unit: str | None) -> float:
@@ -91,7 +93,7 @@ class GoodShortSource(BaseSource):
     def parse_detail(self, html: str) -> dict:
         soup = BeautifulSoup(html, "lxml")
         text = soup.get_text(" ", strip=True)
-        out = {"synopsis": "", "views": None, "followers": None, "genre": "", "cast": [], "episodes": None, "cover": ""}
+        out = {"synopsis": "", "views": None, "followers": None, "genre": "", "cast": [], "episodes": None, "cover": "", "tags": []}
 
         vm = RE_VIEWS.search(text)
         if vm:
@@ -103,9 +105,17 @@ class GoodShortSource(BaseSource):
         if em:
             out["episodes"] = int(em.group(1))
 
-        glink = soup.find("a", href=RE_GENRE_LINK)
+        # 分类：面包屑里的那个才是这部剧的（页面顶部导航菜单也有一排分类链接，不能取第一个）
+        crumb = soup.find(class_=re.compile(r"bread", re.I))
+        glink = crumb.find("a", href=RE_GENRE_LINK) if crumb else None
         if glink:
             out["genre"] = glink.get_text(strip=True)
+        else:
+            tm = RE_TITLE_GENRE.search(soup.title.get_text() if soup.title else "")
+            out["genre"] = tm.group(1) if tm else ""
+        # 详情页的题材标签比列表页全，一并带回
+        out["tags"] = list(dict.fromkeys(
+            tm.group(1).replace("-", " ").title() for tm in map(RE_TAG.search, [a["href"] for a in soup.find_all("a", href=True)]) if tm))
 
         out["cast"] = [a.get_text(strip=True) for a in soup.find_all("a", href=RE_ACTOR)][:3]
 
@@ -146,6 +156,8 @@ class GoodShortSource(BaseSource):
                     else:
                         merged[it.platform_id] = it
             log.info("GoodShort %s: %d 条", cat, total)
+            if cat == "All" and total < MIN_ALL_ITEMS:
+                raise RuntimeError(f"GoodShort 列表页只解析出 {total} 条（正常 40+），网页结构可能变了，请用快照检查解析器")
 
         need = self._need_detail(list(merged))
         budget = DETAIL_BUDGET
@@ -164,7 +176,7 @@ class GoodShortSource(BaseSource):
             it.cover = d["cover"] or it.cover
             it.heat = d["views"] if d["views"] is not None else it.heat
             it.likes = int(d["followers"]) if d["followers"] is not None else it.likes
-            extra = ([d["genre"]] if d["genre"] else []) + [f"主演:{c}" for c in d["cast"]]
+            extra = ([d["genre"]] if d["genre"] else []) + d["tags"] + [f"主演:{c}" for c in d["cast"]]
             if d["episodes"]:
                 extra.append(f"{d['episodes']}集")
             it.raw_tags = list(dict.fromkeys(it.raw_tags + extra))

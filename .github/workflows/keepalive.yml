@@ -1,0 +1,49 @@
+name: keepalive
+# 两件事：
+# 1. 每天 ping 一次 Supabase，免费版 7 天没活动会自动暂停
+# 2. 每周提交一次心跳文件——GitHub 会把 60 天没有新提交的仓库的定时任务自动关掉，
+#    之前采集悄悄停掉、数据库被暂停，很可能就是这个原因
+on:
+  schedule:
+    - cron: "30 3 * * *"      # 每天一次 DB ping
+    - cron: "0 4 * * 0"       # 每周日提交心跳
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ping-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "psycopg[binary]"
+      - name: Ping Supabase
+        run: |
+          python - <<'PY'
+          import os, psycopg
+          url = os.environ["DATABASE_URL"].replace("postgres://", "postgresql://", 1)
+          with psycopg.connect(url, connect_timeout=20) as c:
+              n = c.execute("select count(*) from drama").fetchone()[0]
+          print(f"数据库正常，drama 表 {n} 条")
+          PY
+
+  heartbeat:
+    if: github.event.schedule == '0 4 * * 0' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Commit heartbeat
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .heartbeat
+          git config user.name "radar-bot"
+          git config user.email "radar-bot@users.noreply.github.com"
+          git add .heartbeat
+          git commit -m "chore: heartbeat（保持定时任务不被 GitHub 关闭）" || echo "nothing to commit"
+          git push

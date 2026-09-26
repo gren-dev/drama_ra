@@ -4,6 +4,11 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
+try:                                   # 本地有共享包时统一日志到工作台 logs/；Cloud 上没有就用默认 logging
+    from dramakit.log import setup as _log_setup
+    _log_setup("drama_radar")
+except ImportError:
+    pass
 
 
 def _get(key: str, default: str = "") -> str:
